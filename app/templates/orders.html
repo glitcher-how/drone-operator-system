@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Заказы{% endblock %}
+{% block content %}
+<h1>Заказы-наряды</h1>
+
+<div class="grid">
+    <div class="card">
+        <h2>Создание заказа-наряда</h2>
+        <form method="post">
+            <input name="customer_name" placeholder="Заказчик" required>
+            <input name="mission_type" placeholder="Тип миссии" required>
+            <input name="cargo_weight" type="number" min="0" step="0.1" placeholder="Вес груза, кг" required>
+            <input name="departure_point" placeholder="Точка отправления" required>
+            <input name="destination_point" placeholder="Точка назначения" required>
+            <label>Требуемое время:</label>
+            <input name="required_time" type="datetime-local" required>
+            <button type="submit">Создать заказ</button>
+        </form>
+    </div>
+
+    <div class="card full">
+        <h2>Список заказов</h2>
+        <table>
+            <tr>
+                <th>ID</th>
+                <th>Заказчик</th>
+                <th>Тип миссии</th>
+                <th>Вес</th>
+                <th>Маршрут</th>
+                <th>Время</th>
+                <th>Статус</th>
+                <th>Дрон</th>
+                <th>Действие</th>
+            </tr>
+            {% for o in orders %}
+            <tr>
+                <td>{{ o.id }}</td>
+                <td>{{ o.customer_name }}</td>
+                <td>{{ o.mission_type }}</td>
+                <td>{{ o.cargo_weight }} кг</td>
+                <td>{{ o.departure_point }} → {{ o.destination_point }}</td>
+                <td>{{ o.required_time }}</td>
+                <td>
+                    <span class="status status-{{ o.status }}">
+                    {{ o.status }}
+                    </span>
+                </td>
+                <td>{{ o.drone_name ~ ' (' ~ o.serial_number ~ ')' if o.drone_name else '—' }}</td>
+		<td>
+
+                    {% if o.status == 'new' %}
+                    <form method="post" action="{{ url_for('orders.assign_order_drone', order_id=o.id) }}">
+                        <button type="submit">Подобрать дрон</button>
+                    </form>
+
+                    {% elif o.status == 'assigned' %}
+                    <form method="post" action="{{ url_for('orders.complete_order', order_id=o.id) }}">
+                        <button type="submit">Завершить миссию</button>
+                    </form>
+
+                    {% else %}
+                    —
+
+                    {% endif %}
+
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="9">Заказов пока нет.</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+</div>
+{% endblock %}

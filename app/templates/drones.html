@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Дроны{% endblock %}
+{% block content %}
+<h1>Дроны</h1>
+
+<div class="grid">
+    <div class="card">
+        <h2>Регистрация нового дрона</h2>
+        <form method="post">
+            <input name="name" placeholder="Название дрона" required>
+            <input name="drone_type" placeholder="Тип дрона" required>
+            <input name="serial_number" placeholder="Серийный номер" required>
+            <select name="status">
+                <option value="registered">registered</option>
+                <option value="ready">ready</option>
+                <option value="maintenance">maintenance</option>
+            </select>
+            <input name="payload_capacity" type="number" min="0" step="0.1" placeholder="Грузоподъёмность, кг" required>
+            <input name="range_km" type="number" min="0" step="0.1" placeholder="Дальность, км" required>
+            <input name="battery_level" type="number" min="0" max="100" placeholder="Заряд, %" required>
+            <label>Сертификат действителен до:</label>
+            <input name="certificate_valid_until" type="date" required>
+            <button type="submit">Зарегистрировать</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Привязка нового дрона к дронопорту</h2>
+        <form method="post" action="{{ url_for('drones.assign_droneport') }}">
+            <select name="drone_id" required>
+                <option value="">Выберите дрон</option>
+                {% for d in unassigned_drones %}
+                <option value="{{ d.id }}">{{ d.name }} ({{ d.serial_number }})</option>
+                {% endfor %}
+            </select>
+
+            <select name="droneport_id" required>
+                <option value="">Выберите дронопорт</option>
+                {% for p in ports %}
+                <option value="{{ p.id }}">{{ p.name }} — {{ p.location }}</option>
+                {% endfor %}
+            </select>
+
+            <button type="submit">Привязать</button>
+        </form>
+    </div>
+
+    <div class="card full">
+        <h2>Реестр дронов</h2>
+        <table>
+            <tr>
+                <th>ID</th>
+                <th>Название</th>
+                <th>Тип</th>
+                <th>Серийный номер</th>
+                <th>Статус</th>
+                <th>Грузоподъёмность</th>
+                <th>Дальность</th>
+                <th>Заряд</th>
+                <th>Сертификат</th>
+                <th>Дронопорт</th>
+            </tr>
+            {% for d in drones %}
+            <tr>
+                <td>{{ d.id }}</td>
+                <td>{{ d.name }}</td>
+                <td>{{ d.drone_type }}</td>
+                <td>{{ d.serial_number }}</td>
+                <td>
+                    <span class="status status-{{ d.status }}">
+                    {{ d.status }}
+                    </span>
+                </td>
+                <td>{{ d.payload_capacity }} кг</td>
+                <td>{{ d.range_km }} км</td>
+                <td>{{ d.battery_level }}%</td>
+                <td>
+                    {{ d.certificate_valid_until }}
+
+                    {% if certificate_expiring_soon(d.certificate_valid_until) %}
+                        <span class="status" style="background:#f1c40f;color:black">
+                        ⚠ скоро истекает
+                        </span>
+                    {% endif %}
+
+                </td>
+                <td>{{ d.droneport_name or '—' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="10">Дронов пока нет.</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+</div>
+{% endblock %}

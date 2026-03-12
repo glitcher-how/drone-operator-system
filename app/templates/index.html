@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Главная{% endblock %}
+{% block content %}
+<h1>Инструмент эксплуатанта дронов</h1>
+<p class="muted">MVP для регистрации дронов, привязки к дронопортам, создания заказов-нарядов и подбора дрона.</p>
+
+<div class="grid">
+    <div class="card"><h3>Дроны</h3><div class="badge">{{ stats.drones }}</div></div>
+    <div class="card"><h3>Дронопорты</h3><div class="badge">{{ stats.droneports }}</div></div>
+    <div class="card"><h3>Заказы</h3><div class="badge">{{ stats.orders }}</div></div>
+    <div class="card"><h3>События</h3><div class="badge">{{ stats.events }}</div></div>
+</div>
+{% endblock %}

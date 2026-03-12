@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Журнал событий{% endblock %}
+{% block content %}
+<h1>Журнал событий</h1>
+
+<div class="card">
+    <table>
+        <tr>
+            <th>Время</th>
+            <th>Тип события</th>
+            <th>Описание</th>
+        </tr>
+        {% for e in events %}
+        <tr>
+            <td>{{ e.created_at }}</td>
+            <td>{{ e.event_type }}</td>
+            <td>{{ e.details }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3">Событий пока нет.</td></tr>
+        {% endfor %}
+    </table>
+</div>
+{% endblock %}

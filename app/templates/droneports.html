@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Дронопорты{% endblock %}
+{% block content %}
+<h1>Дронопорты</h1>
+
+<div class="grid">
+    <div class="card">
+        <h2>Добавить дронопорт</h2>
+        <form method="post">
+            <input name="name" placeholder="Название" required>
+            <input name="location" placeholder="Локация" required>
+            <input name="capacity" type="number" min="0" placeholder="Вместимость" required>
+            <select name="status">
+                <option value="active">active</option>
+                <option value="inactive">inactive</option>
+            </select>
+            <button type="submit">Сохранить</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Список дронопортов</h2>
+        <table>
+            <tr>
+                <th>ID</th>
+                <th>Название</th>
+                <th>Локация</th>
+                <th>Вместимость</th>
+                <th>Занято</th>
+                <th>Статус</th>
+            </tr>
+            {% for p in ports %}
+            <tr>
+                <td>{{ p.id }}</td>
+                <td>{{ p.name }}</td>
+                <td>{{ p.location }}</td>
+                <td>{{ p.capacity }}</td>
+                <td>{{ loads[p.id] }}</td>
+                <td>{{ p.status }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6">Пока нет дронопортов.</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+</div>
+{% endblock %}

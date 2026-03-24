@@ -2,6 +2,7 @@ import sqlite3
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from ..db import execute, query_all
+from ..logger import publish_droneport
 from ..services import droneport_load, log_event
 
 bp = Blueprint("droneports", __name__)
@@ -20,7 +21,16 @@ def droneports_page():
                     request.form["status"],
                 ),
             )
-            log_event("droneport_created", f"Создан дронопорт '{request.form['name']}'.")
+            log_event(
+                "droneport_created", f"Создан дронопорт '{request.form['name']}'."
+            )
+            publish_droneport({
+                "name": request.form["name"].strip(),
+                "location": request.form["location"].strip(),
+                "capacity": int(request.form["capacity"]),
+                "status": request.form["status"],
+                "team": "M2",
+            })
             flash("Дронопорт создан.")
         except sqlite3.IntegrityError:
             flash("Дронопорт с таким названием уже существует.")

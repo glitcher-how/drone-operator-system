@@ -1,14 +1,9 @@
 from datetime import date, datetime
 
-from .db import execute, query_all, query_one
+from .db import query_all, query_one
+from .droneport_client import get_available_drones
+from .logger import log_event
 from .security_monitor import run_security_checks
-
-
-def log_event(event_type: str, details: str) -> None:
-    execute(
-        "INSERT INTO events(created_at, event_type, details) VALUES (?, ?, ?)",
-        (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), event_type, details),
-    )
 
 
 def droneport_load(droneport_id: int) -> int:
@@ -30,8 +25,29 @@ def select_best_drone(order_id: int):
     if not order:
         return None, ["Заказ не найден."]
 
+    log_event(
+        "droneport_available_drones_requested",
+        f"Для заказа ID={order_id} запрошен список доступных дронов из DronePort.",
+    )
+
+    available_serials = get_available_drones()
+
+    if not available_serials:
+        log_event(
+            "droneport_available_drones_received",
+            f"Для заказа ID={order_id} DronePort не вернул доступных дронов.",
+        )
+        return None, ["DronePort не вернул доступных дронов."]
+
+    log_event(
+        "droneport_available_drones_received",
+        f"Для заказа ID={order_id} получены доступные дроны: {', '.join(available_serials)}.",
+    )
+
+    placeholders = ",".join("?" for _ in available_serials)
+
     candidates = query_all(
-        """
+        f"""
         SELECT
             d.*,
             p.name AS droneport_name,
@@ -39,6 +55,7 @@ def select_best_drone(order_id: int):
             p.status AS droneport_status
         FROM drones d
         LEFT JOIN droneports p ON p.id = d.droneport_id
+        WHERE d.serial_number IN ({placeholders})
         ORDER BY
             CASE
                 WHEN LOWER(TRIM(p.location)) = LOWER(TRIM(?)) THEN 0
@@ -48,7 +65,7 @@ def select_best_drone(order_id: int):
             d.payload_capacity ASC,
             d.id ASC
         """,
-        (order["departure_point"],),
+        tuple(available_serials) + (order["departure_point"],),
     )
 
     reasons = []
@@ -74,17 +91,30 @@ def select_best_drone(order_id: int):
             if same_location:
                 log_event(
                     "drone_selected_nearest",
-                    f"Для заказа ID={order_id} выбран ближайший дрон ID={drone['id']} из локации '{drone['droneport_location']}'.",
+                    (
+                        "Для заказа ID={order_id} выбран ближайший дрон "
+                        "ID={drone_id} из локации '{location}'."
+                    ).format(
+                        order_id=order_id,
+                        drone_id=drone["id"],
+                        location=drone["droneport_location"],
+                    ),
                 )
             else:
                 log_event(
                     "drone_selected_fallback",
-                    f"Для заказа ID={order_id} не найден дрон в точке отправления, выбран резервный дрон ID={drone['id']}.",
+                    (
+                        "Для заказа ID={order_id} не найден дрон в точке отправления, "
+                        "выбран резервный дрон ID={drone_id}."
+                    ).format(order_id=order_id, drone_id=drone["id"]),
                 )
 
             log_event(
                 "security_check_passed",
-                f"Проверка безопасности пройдена для дрона ID={drone['id']} по заказу ID={order_id}.",
+                (
+                    "Проверка безопасности пройдена для дрона ID={drone_id} "
+                    "по заказу ID={order_id}."
+                ).format(order_id=order_id, drone_id=drone["id"]),
             )
 
             return drone, []

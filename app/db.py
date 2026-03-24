@@ -1,7 +1,6 @@
 import sqlite3
 from flask import current_app, g
 
-
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS droneports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,6 +35,9 @@ CREATE TABLE IF NOT EXISTS orders (
     status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'assigned', 'in_progress', 'done', 'cancelled')),
     assigned_drone_id INTEGER,
     created_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    external_request_id TEXT,
+    offered_price REAL,
     FOREIGN KEY (assigned_drone_id) REFERENCES drones(id)
 );
 
@@ -64,6 +66,20 @@ def close_db(e=None) -> None:
 def init_db() -> None:
     db = get_db()
     db.executescript(SCHEMA_SQL)
+    # Миграция: добавляем новые колонки в orders если их нет (для существующих БД)
+    for col, definition in [
+        ("source", "TEXT NOT NULL DEFAULT 'manual'"),
+        ("external_request_id", "TEXT"),
+        ("offered_price", "REAL"),
+        ("mission_id", "TEXT"),
+        ("insurance_policy_id", "TEXT"),
+        ("gcs_task_id", "TEXT"),
+        ("orvd_ok", "INTEGER DEFAULT 0"),
+    ]:
+        try:
+            db.execute(f"ALTER TABLE orders ADD COLUMN {col} {definition}")
+        except Exception:
+            pass  # колонка уже существует
     db.commit()
 
 

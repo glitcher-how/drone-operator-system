@@ -4,6 +4,7 @@ from datetime import date
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from ..db import execute, query_all, query_one
+from ..logger import publish_drone
 from ..services import droneport_load, log_event
 
 bp = Blueprint("drones", __name__)
@@ -36,22 +37,35 @@ def drones_page():
                     cert,
                 ),
             )
-            log_event("drone_registered", f"Зарегистрирован дрон '{request.form['name']}'.")
+            log_event(
+                "drone_registered", f"Зарегистрирован дрон '{request.form['name']}'."
+            )
+            publish_drone({
+                "name": request.form["name"].strip(),
+                "drone_type": request.form["drone_type"].strip(),
+                "serial_number": request.form["serial_number"].strip(),
+                "status": request.form["status"],
+                "payload_capacity": float(request.form["payload_capacity"]),
+                "range_km": float(request.form["range_km"]),
+                "battery_level": int(request.form["battery_level"]),
+                "certificate_valid_until": cert,
+                "team": "M2",
+            })
             flash("Дрон зарегистрирован.")
         except sqlite3.IntegrityError:
             flash("Дрон с таким серийным номером уже существует.")
         return redirect(url_for("drones.drones_page"))
 
-    drones = query_all(
-        """
+    drones = query_all("""
         SELECT d.*, p.name AS droneport_name
         FROM drones d
         LEFT JOIN droneports p ON p.id = d.droneport_id
         ORDER BY d.id DESC
-        """
-    )
+        """)
     ports = query_all("SELECT * FROM droneports WHERE status = 'active' ORDER BY name")
-    unassigned_drones = query_all("SELECT * FROM drones WHERE droneport_id IS NULL ORDER BY id DESC")
+    unassigned_drones = query_all(
+        "SELECT * FROM drones WHERE droneport_id IS NULL ORDER BY id DESC"
+    )
     from ..services import certificate_expiring_soon
 
     return render_template(
@@ -59,7 +73,7 @@ def drones_page():
         drones=drones,
         ports=ports,
         unassigned_drones=unassigned_drones,
-        certificate_expiring_soon=certificate_expiring_soon
+        certificate_expiring_soon=certificate_expiring_soon,
     )
 
 
@@ -88,9 +102,17 @@ def assign_droneport():
         return redirect(url_for("drones.drones_page"))
 
     execute(
-        "UPDATE drones SET droneport_id = ?, status = CASE WHEN status = 'registered' THEN 'ready' ELSE status END WHERE id = ?",
+        """
+        UPDATE drones
+        SET droneport_id = ?,
+            status = CASE WHEN status = 'registered' THEN 'ready' ELSE status END
+        WHERE id = ?
+        """,
         (droneport_id, drone_id),
     )
-    log_event("drone_assigned_to_port", f"Дрон ID={drone_id} привязан к дронопорту ID={droneport_id}.")
+    log_event(
+        "drone_assigned_to_port",
+        f"Дрон ID={drone_id} привязан к дронопорту ID={droneport_id}.",
+    )
     flash("Дрон привязан к дронопорту.")
     return redirect(url_for("drones.drones_page"))

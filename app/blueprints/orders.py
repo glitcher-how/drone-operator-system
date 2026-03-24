@@ -4,7 +4,7 @@ from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from ..db import execute, query_all, query_one
 from ..logger import log_event, publish_order_result, publish_price_offer
-from ..mission_orchestrator import run_mission_assignment
+from ..mission_orchestrator import report_incident_to_insurer, run_mission_assignment
 from ..services import select_best_drone
 
 bp = Blueprint("orders", __name__)
@@ -87,13 +87,19 @@ def assign_order_drone(order_id: int):
         ),
     )
 
-    # Если заказ пришёл от Aggregator — отправляем price_offer
+    # Если заказ пришёл от Aggregator — отправляем price_offer с реальными ЦБ
     if fresh_order["source"] == "aggregator" and fresh_order["external_request_id"]:
+        import json as _json
         price = float(fresh_order["offered_price"] or 2500.0)
+        try:
+            security_goals = _json.loads(fresh_order["security_goals"] or '["ЦБ1"]')
+        except Exception:
+            security_goals = ["ЦБ1"]
         publish_price_offer(
             request_id=fresh_order["external_request_id"],
             order_id=order_id,
             price=price,
+            security_goals=security_goals,
         )
         log_event("price_offer_sent", f"Отправлен price_offer Aggregator'у по заказу ID={order_id}.")
 
@@ -141,4 +147,44 @@ def complete_order(order_id: int):
         log_event("order_result_sent", f"Отправлен order_result Aggregator'у по заказу ID={order_id}.")
 
     flash("Миссия завершена.")
+    return redirect(url_for("orders.orders_page"))
+
+
+@bp.post("/orders/<int:order_id>/cancel")
+def cancel_order(order_id: int):
+    order = query_one("SELECT * FROM orders WHERE id = ?", (order_id,))
+    if not order:
+        flash("Заказ не найден.")
+        return redirect(url_for("orders.orders_page"))
+
+    if order["status"] in ("done", "cancelled"):
+        flash("Заказ уже закрыт.")
+        return redirect(url_for("orders.orders_page"))
+
+    execute("UPDATE orders SET status = 'cancelled' WHERE id = ?", (order_id,))
+
+    # Освобождаем дрон если был назначен
+    if order["assigned_drone_id"]:
+        execute("UPDATE drones SET status = 'ready' WHERE id = ?", (order["assigned_drone_id"],))
+        drone = query_one("SELECT * FROM drones WHERE id = ?", (order["assigned_drone_id"],))
+    else:
+        drone = None
+
+    log_event("order_cancelled", f"Заказ ID={order_id} отменён.")
+
+    # Страховой случай если полис был куплен
+    if order.get("insurance_policy_id") and drone:
+        report_incident_to_insurer(dict(order), dict(drone), reason="Миссия отменена оператором.")
+
+    # Уведомляем Aggregator об отмене
+    if order["source"] == "aggregator" and order["external_request_id"]:
+        publish_order_result(
+            request_id=order["external_request_id"],
+            success=False,
+            total_price=0.0,
+            reason="Миссия отменена оператором.",
+        )
+        log_event("order_result_sent", f"Отправлен order_result (отмена) Aggregator'у по заказу ID={order_id}.")
+
+    flash("Заказ отменён.")
     return redirect(url_for("orders.orders_page"))

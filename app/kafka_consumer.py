@@ -2,10 +2,9 @@
 Kafka consumer команды М2.
 
 Подписывается на:
-  1. v1.aggregator_insurer.local.operator.requests
-     — заказы от Aggregator (create_order, confirm_price)
-  2. M2_REPLY_TOPIC (v1.replies.m2_operator.droneport)
-     — ответы от DronePort на get_available_drones
+  1. AGGREGATOR_REQUESTS_TOPIC  — заказы от Агрегатора (create_order, confirm_price)
+  2. M2_REPLY_TOPIC             — ответы DronePort на get_available_drones
+  3. GCS_TELEMETRY_TOPIC        — телеметрия дронов от НУС (статус, заряд)
 
 Периодически запрашивает доступные дроны из DronePort.
 """
@@ -22,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 
 def _sasl_config() -> dict:
-    """SASL PLAIN аутентификация из переменных окружения BROKER_USER / BROKER_PASSWORD."""
     user = os.environ.get("BROKER_USER")
     password = os.environ.get("BROKER_PASSWORD")
     if user and password:
@@ -34,7 +32,8 @@ def _sasl_config() -> dict:
         }
     return {}
 
-# Топики (настраиваются через .env)
+
+# ── Топики ─────────────────────────────────────────────────────────────────
 AGGREGATOR_REQUESTS_TOPIC = os.environ.get(
     "AGGREGATOR_REQUESTS_TOPIC",
     "v1.aggregator_insurer.local.operator.requests",
@@ -47,32 +46,23 @@ M2_REPLY_TOPIC = os.environ.get(
     "M2_REPLY_TOPIC",
     "v1.replies.m2_operator.droneport",
 )
+GCS_TELEMETRY_TOPIC = os.environ.get(
+    "GCS_TELEMETRY_TOPIC",
+    "v1.gcs.1.drone_manager",
+)
 DRONEPORT_SYNC_INTERVAL = int(os.environ.get("DRONEPORT_SYNC_INTERVAL", "60"))
 
 
-# ---------------------------------------------------------------------------
-# DronePort — обработка ответов
-# ---------------------------------------------------------------------------
+# ── DronePort — обработка ответов ──────────────────────────────────────────
 
 def _upsert_drone_from_droneport(data: dict) -> None:
-    """
-    Вставляет или обновляет дрон, полученный от DronePort.
-
-    DronePort поля:
-      drone_id, model, battery (str), status (new/ready/charging/busy)
-    """
     from .db import execute, query_one
 
     drone_id = data.get("drone_id")
     if not drone_id:
         return
 
-    status_map = {
-        "ready": "ready",
-        "charging": "maintenance",
-        "busy": "busy",
-        "new": "registered",
-    }
+    status_map = {"ready": "ready", "charging": "maintenance", "busy": "busy", "new": "registered"}
     try:
         battery = int(float(data.get("battery", 100)))
     except (ValueError, TypeError):
@@ -82,59 +72,85 @@ def _upsert_drone_from_droneport(data: dict) -> None:
     m2_status = status_map.get(data.get("status", "ready"), "ready")
     name = data.get("model", drone_id)
 
-    existing = query_one(
-        "SELECT id FROM drones WHERE serial_number = ?", (drone_id,)
-    )
+    existing = query_one("SELECT id FROM drones WHERE serial_number = ?", (drone_id,))
     if existing:
         execute(
-            """UPDATE drones SET name = ?, status = ?, battery_level = ?
-               WHERE serial_number = ?""",
+            "UPDATE drones SET name = ?, status = ?, battery_level = ? WHERE serial_number = ?",
             (name, m2_status, battery, drone_id),
         )
     else:
         execute(
-            """INSERT INTO drones(
-                name, drone_type, serial_number, status,
-                payload_capacity, range_km, battery_level, certificate_valid_until
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO drones(name, drone_type, serial_number, status,
+               payload_capacity, range_km, battery_level, certificate_valid_until)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (name, "external", drone_id, m2_status, 0.0, 0.0, battery, "2099-12-31"),
         )
 
 
-# ---------------------------------------------------------------------------
-# Aggregator — обработка входящих заказов
-# ---------------------------------------------------------------------------
+# ── НУС — телеметрия дронов ────────────────────────────────────────────────
 
-def _handle_create_order(payload: dict, request_id: str) -> None:
+def _handle_telemetry(payload: dict) -> None:
     """
-    Получили create_order от Aggregator — создаём заказ в локальной БД.
-
-    Aggregator payload:
-      customer_id, description, budget, mission_type,
-      from_lat, from_lon, to_lat, to_lon
+    Обновляет статус и заряд дрона по телеметрии от НУС.
+    НУС отправляет: drone_id, battery, latitude, longitude, altitude
     """
     from .db import execute, query_one
 
-    existing = query_one(
-        "SELECT id FROM orders WHERE external_request_id = ?", (request_id,)
-    )
+    telemetry = payload.get("telemetry", payload)
+    drone_id = telemetry.get("drone_id")
+    if not drone_id:
+        return
+
+    existing = query_one("SELECT id FROM drones WHERE serial_number = ?", (drone_id,))
+    if not existing:
+        logger.debug(f"[НУС] Телеметрия для неизвестного дрона: {drone_id}")
+        return
+
+    battery = telemetry.get("battery")
+    updates = []
+    params = []
+
+    if battery is not None:
+        try:
+            battery = max(0, min(100, int(float(battery))))
+            updates.append("battery_level = ?")
+            params.append(battery)
+        except (ValueError, TypeError):
+            pass
+
+    if updates:
+        params.append(drone_id)
+        execute(
+            f"UPDATE drones SET {', '.join(updates)} WHERE serial_number = ?",
+            tuple(params),
+        )
+        logger.info(f"[НУС] Телеметрия дрона {drone_id}: батарея={battery}%")
+
+
+# ── Aggregator — входящие заказы ───────────────────────────────────────────
+
+def _handle_create_order(payload: dict, request_id: str) -> None:
+    from .db import execute, query_one
+    import json as _json
+
+    existing = query_one("SELECT id FROM orders WHERE external_request_id = ?", (request_id,))
     if existing:
-        return  # уже создан
+        return
 
     departure = f"{payload.get('from_lat', 0)},{payload.get('from_lon', 0)}"
     destination = f"{payload.get('to_lat', 0)},{payload.get('to_lon', 0)}"
     budget = float(payload.get("budget", 0))
-    # Бюджет используем как приблизительный вес груза (заглушка)
     cargo_weight = round(budget / 1000, 2) if budget > 0 else 1.0
-
+    # Сохраняем цели безопасности из заказа
+    security_goals = _json.dumps(payload.get("security_goals", ["ЦБ1"]))
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     execute(
         """INSERT INTO orders(
             customer_name, mission_type, cargo_weight, departure_point,
             destination_point, required_time, status, created_at,
-            source, external_request_id, offered_price
-           ) VALUES (?, ?, ?, ?, ?, ?, 'new', ?, 'aggregator', ?, ?)""",
+            source, external_request_id, offered_price, security_goals
+           ) VALUES (?, ?, ?, ?, ?, ?, 'new', ?, 'aggregator', ?, ?, ?)""",
         (
             payload.get("customer_id", "Aggregator"),
             payload.get("mission_type", "delivery"),
@@ -145,21 +161,16 @@ def _handle_create_order(payload: dict, request_id: str) -> None:
             now,
             request_id,
             budget,
+            security_goals,
         ),
     )
     logger.info(f"[Aggregator] Создан заказ: request_id={request_id}")
 
 
 def _handle_confirm_price(payload: dict, request_id: str) -> None:
-    """
-    Aggregator подтвердил цену — переводим заказ в assigned (если ещё нет дрона)
-    или in_progress (если дрон уже назначен).
-    """
     from .db import execute, query_one
 
-    order = query_one(
-        "SELECT * FROM orders WHERE external_request_id = ?", (request_id,)
-    )
+    order = query_one("SELECT * FROM orders WHERE external_request_id = ?", (request_id,))
     if not order:
         logger.warning(f"[Aggregator] confirm_price: заказ {request_id} не найден")
         return
@@ -172,9 +183,7 @@ def _handle_confirm_price(payload: dict, request_id: str) -> None:
     logger.info(f"[Aggregator] Цена подтверждена: request_id={request_id}")
 
 
-# ---------------------------------------------------------------------------
-# DronePort — периодический запрос доступных дронов
-# ---------------------------------------------------------------------------
+# ── DronePort — периодический запрос ──────────────────────────────────────
 
 def _request_droneport_drones(producer: KafkaProducer) -> None:
     message = {
@@ -188,30 +197,24 @@ def _request_droneport_drones(producer: KafkaProducer) -> None:
     try:
         producer.send(DRONEPORT_REGISTRY_TOPIC, message)
         producer.flush()
-        logger.info(f"[DronePort] Запрос get_available_drones → {DRONEPORT_REGISTRY_TOPIC}")
+        logger.info(f"[DronePort] Запрос get_available_drones отправлен.")
     except Exception as e:
-        logger.error(f"[DronePort] Ошибка отправки запроса: {e}")
+        logger.error(f"[DronePort] Ошибка запроса: {e}")
 
 
 def _schedule_sync(producer: KafkaProducer) -> None:
     _request_droneport_drones(producer)
-    timer = threading.Timer(
-        DRONEPORT_SYNC_INTERVAL,
-        _schedule_sync,
-        args=(producer,),
-    )
+    timer = threading.Timer(DRONEPORT_SYNC_INTERVAL, _schedule_sync, args=(producer,))
     timer.daemon = True
     timer.start()
 
 
-# ---------------------------------------------------------------------------
-# Основной цикл
-# ---------------------------------------------------------------------------
+# ── Основной цикл ─────────────────────────────────────────────────────────
 
 def _consume_loop(bootstrap_servers: str, app) -> None:
-    topics = [AGGREGATOR_REQUESTS_TOPIC, M2_REPLY_TOPIC]
-
+    topics = [AGGREGATOR_REQUESTS_TOPIC, M2_REPLY_TOPIC, GCS_TELEMETRY_TOPIC]
     sasl = _sasl_config()
+
     try:
         consumer = KafkaConsumer(
             *topics,
@@ -233,8 +236,6 @@ def _consume_loop(bootstrap_servers: str, app) -> None:
         return
 
     logger.info(f"Kafka consumer подключён. Топики: {topics}")
-
-    # Первый запрос в DronePort + запуск периодической синхронизации
     _schedule_sync(producer)
 
     with app.app_context():
@@ -247,31 +248,27 @@ def _consume_loop(bootstrap_servers: str, app) -> None:
                     msg_type = data.get("type")
                     request_id = data.get("request_id", "")
                     payload = data.get("payload", {})
-
                     if msg_type == "create_order":
                         _handle_create_order(payload, request_id)
                     elif msg_type == "confirm_price":
                         _handle_confirm_price(payload, request_id)
                     else:
-                        logger.debug(
-                            f"[Aggregator] Неизвестный тип: '{msg_type}'"
-                        )
+                        logger.debug(f"[Aggregator] Неизвестный тип: '{msg_type}'")
 
                 elif topic == M2_REPLY_TOPIC:
                     if data.get("success"):
                         drones = data.get("payload", {}).get("drones", [])
                         for drone in drones:
                             _upsert_drone_from_droneport(drone)
-                        logger.info(
-                            f"[DronePort] Синхронизировано дронов: {len(drones)}"
-                        )
-                    else:
-                        logger.warning(
-                            f"[DronePort] Ошибка в ответе: {data.get('payload')}"
-                        )
+                        logger.info(f"[DronePort] Синхронизировано дронов: {len(drones)}")
+
+                elif topic == GCS_TELEMETRY_TOPIC:
+                    action = data.get("action", "")
+                    if action == "telemetry.save":
+                        _handle_telemetry(data.get("payload", {}))
 
             except Exception as e:
-                logger.error(f"Ошибка обработки Kafka-сообщения: {e}")
+                logger.error(f"Ошибка обработки сообщения: {e}")
 
 
 def start_consumer(bootstrap_servers: str, app) -> None:

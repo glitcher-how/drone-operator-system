@@ -35,6 +35,11 @@ def create_app() -> Flask:
     if kafka_servers:
         from .kafka_consumer import start_consumer
         start_consumer(kafka_servers, app)
+
+        # Регистрируем топики М2 у Регулятора при старте
+        with app.app_context():
+            from .mission_orchestrator import register_topics_with_regulator
+            register_topics_with_regulator()
     else:
         logging.getLogger(__name__).warning(
             "KAFKA_BOOTSTRAP_SERVERS не задан — Kafka consumer не запущен. "

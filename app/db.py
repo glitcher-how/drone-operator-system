@@ -75,6 +75,7 @@ def init_db() -> None:
         ("insurance_policy_id", "TEXT"),
         ("gcs_task_id", "TEXT"),
         ("orvd_ok", "INTEGER DEFAULT 0"),
+        ("security_goals", "TEXT"),
     ]:
         try:
             db.execute(f"ALTER TABLE orders ADD COLUMN {col} {definition}")

@@ -119,7 +119,7 @@ def complete_order(order_id: int):
         flash("Заказ не найден.")
         return redirect(url_for("orders.orders_page"))
 
-    if order["status"] != "assigned":
+    if order["status"] not in ("assigned", "in_progress"):
         flash("Можно завершить только назначенный заказ.")
         return redirect(url_for("orders.orders_page"))
 

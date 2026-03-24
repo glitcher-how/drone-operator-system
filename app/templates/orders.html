@@ -56,16 +56,11 @@
                         <button type="submit" style="background:#c0392b">Отменить</button>
                     </form>
 
-                    {% elif o.status == 'assigned' %}
+                    {% elif o.status == 'assigned' or o.status == 'in_progress' %}
                     <form method="post" action="{{ url_for('orders.complete_order', order_id=o.id) }}" style="display:inline">
                         <button type="submit">Завершить миссию</button>
                     </form>
                     <form method="post" action="{{ url_for('orders.cancel_order', order_id=o.id) }}" style="display:inline" onsubmit="return confirm('Отменить заказ и сообщить страховой?')">
-                        <button type="submit" style="background:#c0392b">Отменить</button>
-                    </form>
-
-                    {% elif o.status == 'in_progress' %}
-                    <form method="post" action="{{ url_for('orders.cancel_order', order_id=o.id) }}" style="display:inline" onsubmit="return confirm('Отменить заказ?')">
                         <button type="submit" style="background:#c0392b">Отменить</button>
                     </form>
 

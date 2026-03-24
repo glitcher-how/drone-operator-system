@@ -45,6 +45,7 @@ def publish_price_offer(
     order_id: int,
     price: float,
     estimated_minutes: int = 30,
+    security_goals: list | None = None,
 ) -> None:
     """Отправляет предложение цены в Aggregator."""
     if kafka_client is not None:
@@ -53,6 +54,7 @@ def publish_price_offer(
             order_id=order_id,
             price=price,
             estimated_minutes=estimated_minutes,
+            security_goals=security_goals,
         )
 
 

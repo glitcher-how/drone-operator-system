@@ -33,6 +33,9 @@ def check_drone_status(drone) -> str | None:
 
 
 def check_droneport(drone, droneport) -> str | None:
+    # Внешние дроны (от DronePort других команд) не имеют дронопорта в нашей БД
+    if drone["drone_type"] == "external":
+        return None
     if drone["droneport_id"] is None:
         return "Дрон не привязан к дронопорту."
     if not droneport:
